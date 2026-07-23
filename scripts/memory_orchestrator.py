@@ -81,6 +81,31 @@ def cosine_similarity(vec_a, vec_b):
     return dot / (norm_a * norm_b)
 
 
+# Empirically observed range for amazon.titan-embed-text-v1 cosine similarity
+# on short business-sentence pairs in this domain: ~0.1 for unrelated content,
+# ~0.4 for a genuinely strong match (see test_vector_search.py's very first
+# real result: 0.309 for a clearly correct match). Raw cosine similarity does
+# NOT naturally span 0-1 for this model/domain -- without rescaling, semantic
+# evidence is structurally capped around 0.3-0.4 raw, which can never compete
+# against other memory types' fixed-constant importance values (long_term=1.0,
+# short_term=0.7). This rescales it onto a comparable 0-1 scale before combining
+# with confidence.
+SIMILARITY_FLOOR = 0.1   # ~unrelated content
+SIMILARITY_CEILING = 0.4  # ~genuinely strong match
+
+
+def rescale_similarity(raw_similarity, floor=SIMILARITY_FLOOR, ceiling=SIMILARITY_CEILING):
+    """Rescales raw cosine similarity onto a 0-1 scale comparable to other
+    memory types' importance values, clamped at both ends. This is an
+    empirical calibration for this embedding model and domain, not a
+    universal constant -- worth re-checking if the embedding model changes
+    or as more real semantic memory data accumulates."""
+    if ceiling <= floor:
+        return raw_similarity
+    scaled = (raw_similarity - floor) / (ceiling - floor)
+    return max(0.0, min(1.0, scaled))
+
+
 # ===========================================================================
 # Bedrock helpers
 # ===========================================================================
@@ -338,9 +363,10 @@ def normalize_evidence(memory_type, raw_results):
 
     elif memory_type == "semantic":
         for fact in raw_results:
-            similarity = fact.get("similarity_score", 0.0)
+            raw_similarity = fact.get("similarity_score", 0.0)
+            rescaled_similarity = rescale_similarity(raw_similarity)
             confidence = fact.get("confidence", 0.5)
-            importance = similarity * confidence
+            importance = rescaled_similarity * confidence
             evidence.append({
                 "evidence_id": f"ev_semantic_{fact.get('logical_id')}",
                 "memory_type": "semantic",
@@ -348,7 +374,8 @@ def normalize_evidence(memory_type, raw_results):
                 "evidence_type": "extracted_knowledge",
                 "source_metadata": {
                     "logical_id": fact.get("logical_id"),
-                    "cosine_similarity": round(similarity, 3),
+                    "raw_cosine_similarity": round(raw_similarity, 3),
+                    "rescaled_similarity": round(rescaled_similarity, 3),
                     "fts_score": round(fact.get("fts_score", 0.0), 3),
                 },
                 "importance": round(importance, 3),

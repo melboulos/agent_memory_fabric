@@ -9,18 +9,20 @@
 <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600&family=IBM+Plex+Sans:wght@400;500&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
 <style>
   :root {
-    --bg: #14181A;
-    --surface: #1E2427;
-    --surface-raised: #262D30;
-    --ink: #E8E6DE;
-    --ink-dim: #9BA3A0;
-    --ink-faint: #5B615F;
-    --slate: #3A4548;
-    --brass: #C98A3B;
-    --brass-bright: #E0A75E;
-    --teal: #5FA8A0;
-    --brick: #B85450;
-    --border: #2B3336;
+    --bg: #EEF0EC;
+    --surface: #FFFFFF;
+    --surface-raised: #F5F6F1;
+    --ink: #1E2420;
+    --ink-dim: #5C6359;
+    --ink-faint: #9AA098;
+    --dormant-fill: #EDEFE8;
+    --dormant-stroke: #B8BEAF;
+    --brass: #B5761F;
+    --brass-bright: #8F5A14;
+    --brass-fill: #E8B972;
+    --teal: #2F7A72;
+    --brick: #A83F3B;
+    --border: #DADED4;
   }
   * { box-sizing: border-box; }
   body {
@@ -37,6 +39,7 @@
     font-size: 32px;
     margin: 0 0 4px;
     letter-spacing: -0.01em;
+    color: var(--ink);
   }
   .subtitle {
     color: var(--ink-dim);
@@ -53,9 +56,10 @@
     align-items: center;
     flex-wrap: wrap;
     margin-bottom: 40px;
+    box-shadow: 0 1px 2px rgba(30,36,32,0.04);
   }
   .console input[type=text], .console select {
-    background: var(--bg);
+    background: var(--surface);
     border: 1px solid var(--border);
     color: var(--ink);
     border-radius: 6px;
@@ -66,7 +70,7 @@
   .console input[type=text] { flex: 1; min-width: 260px; }
   .console button {
     background: var(--brass);
-    color: #1A1408;
+    color: #FFF8EC;
     border: none;
     border-radius: 6px;
     padding: 10px 20px;
@@ -86,16 +90,19 @@
     font-weight: 500;
     font-size: 18px;
     margin: 0 0 16px;
+    color: var(--ink);
   }
   #brain-svg { width: 100%; height: auto; display: block; }
-  .lobe-circle { transition: filter 0.6s ease, stroke 0.4s ease, stroke-width 0.4s ease; }
+  .lobe-circle { transition: fill 0.6s ease, stroke 0.4s ease, stroke-width 0.4s ease; }
   .lobe-circle.selected { animation: pulse 1.8s ease-in-out infinite; }
   @keyframes pulse {
-    0%, 100% { filter: drop-shadow(0 0 6px var(--brass)); }
-    50% { filter: drop-shadow(0 0 16px var(--brass-bright)); }
+    0%, 100% { filter: drop-shadow(0 0 4px rgba(181,118,31,0.35)); }
+    50% { filter: drop-shadow(0 0 12px rgba(181,118,31,0.6)); }
   }
-  .lobe-label { font-family: 'IBM Plex Mono', monospace; font-size: 12px; fill: var(--ink-dim); }
-  .lobe-score { font-family: 'IBM Plex Mono', monospace; font-size: 11px; fill: var(--ink-faint); }
+  .lobe-label { font-family: 'IBM Plex Mono', monospace; font-size: 13px; fill: var(--ink); }
+  .lobe-score { font-family: 'IBM Plex Mono', monospace; font-size: 11px; fill: var(--ink-dim); }
+  .brain-outline { fill: var(--surface); stroke: var(--dormant-stroke); stroke-width: 1.5; }
+  .brain-fold { fill: none; stroke: var(--dormant-stroke); stroke-width: 1; opacity: 0.6; }
 
   .panel {
     background: var(--surface);
@@ -103,6 +110,7 @@
     border-radius: 10px;
     padding: 20px 24px;
     margin-bottom: 20px;
+    box-shadow: 0 1px 2px rgba(30,36,32,0.04);
   }
   .route-row {
     display: flex;
@@ -119,15 +127,15 @@
     padding: 2px 8px;
     border-radius: 4px;
   }
-  .route-tag.selected { background: rgba(201,138,59,0.18); color: var(--brass-bright); }
+  .route-tag.selected { background: rgba(181,118,31,0.14); color: var(--brass-bright); }
   .route-tag.skipped { background: transparent; color: var(--ink-faint); }
 
   .evidence-item { margin-bottom: 14px; }
   .evidence-top { display: flex; justify-content: space-between; font-size: 13px; margin-bottom: 6px; }
   .evidence-type { color: var(--ink-dim); font-family: 'IBM Plex Mono', monospace; font-size: 11px; }
   .evidence-importance { font-family: 'IBM Plex Mono', monospace; font-size: 12px; color: var(--brass-bright); }
-  .evidence-content { font-size: 14px; margin-bottom: 6px; }
-  .bar-track { background: var(--bg); border-radius: 4px; height: 6px; overflow: hidden; }
+  .evidence-content { font-size: 14px; margin-bottom: 6px; color: var(--ink); }
+  .bar-track { background: var(--dormant-fill); border-radius: 4px; height: 6px; overflow: hidden; }
   .bar-fill { height: 100%; background: var(--brass); border-radius: 4px; }
   .evidence-item.dropped .evidence-content { color: var(--ink-faint); text-decoration: line-through; }
   .evidence-item.dropped .bar-fill { background: var(--brick); }
@@ -145,7 +153,7 @@
 
   .trace-id { font-family: 'IBM Plex Mono', monospace; font-size: 11px; color: var(--ink-faint); margin-top: 24px; }
   .empty-state { color: var(--ink-faint); font-size: 14px; padding: 24px 0; text-align: center; }
-  .error-box { background: rgba(184,84,80,0.12); border: 1px solid var(--brick); color: #E8A6A3; border-radius: 8px; padding: 14px 18px; font-size: 14px; margin-bottom: 20px; }
+  .error-box { background: rgba(168,63,59,0.08); border: 1px solid var(--brick); color: #7A2F2C; border-radius: 8px; padding: 14px 18px; font-size: 14px; margin-bottom: 20px; }
 </style>
 </head>
 <body>
@@ -165,35 +173,65 @@
 
   <div class="brain-section">
     <h2>Memory activation</h2>
-    <svg id="brain-svg" viewBox="0 0 900 420" xmlns="http://www.w3.org/2000/svg">
-      <path d="M 450 30
-               C 320 20, 200 70, 160 160
-               C 120 240, 150 320, 240 360
-               C 300 390, 380 400, 450 395
-               C 520 400, 600 390, 660 360
-               C 750 320, 780 240, 740 160
-               C 700 70, 580 20, 450 30 Z"
-            fill="none" stroke="var(--slate)" stroke-width="1.5" stroke-dasharray="3 4"/>
+    <svg id="brain-svg" viewBox="0 0 900 500" xmlns="http://www.w3.org/2000/svg">
+      <defs>
+        <clipPath id="brainClip">
+          <path d="M 450 80
+                   C 360 80, 280 105, 230 150
+                   C 175 130, 130 175, 135 230
+                   C 138 280, 150 330, 190 365
+                   C 175 400, 210 430, 260 435
+                   C 320 445, 380 435, 430 440
+                   C 450 445, 450 445, 470 440
+                   C 520 435, 580 445, 640 435
+                   C 690 430, 725 400, 710 365
+                   C 750 330, 762 280, 765 230
+                   C 770 175, 725 130, 670 150
+                   C 620 105, 540 80, 450 80 Z"/>
+        </clipPath>
+      </defs>
 
-      <circle id="lobe-long_term" class="lobe-circle" cx="290" cy="150" r="70" fill="var(--surface-raised)" stroke="var(--slate)" stroke-width="2"/>
-      <text x="290" y="150" text-anchor="middle" dominant-baseline="central" class="lobe-label">identity</text>
-      <text x="290" y="235" text-anchor="middle" class="lobe-score" id="score-long_term">--</text>
+      <path class="brain-outline"
+            d="M 450 80
+               C 360 80, 280 105, 230 150
+               C 175 130, 130 175, 135 230
+               C 138 280, 150 330, 190 365
+               C 175 400, 210 430, 260 435
+               C 320 445, 380 435, 430 440
+               C 450 445, 450 445, 470 440
+               C 520 435, 580 445, 640 435
+               C 690 430, 725 400, 710 365
+               C 750 330, 762 280, 765 230
+               C 770 175, 725 130, 670 150
+               C 620 105, 540 80, 450 80 Z"/>
 
-      <circle id="lobe-episodic" class="lobe-circle" cx="610" cy="150" r="70" fill="var(--surface-raised)" stroke="var(--slate)" stroke-width="2"/>
-      <text x="610" y="150" text-anchor="middle" dominant-baseline="central" class="lobe-label">timeline</text>
-      <text x="610" y="235" text-anchor="middle" class="lobe-score" id="score-episodic">--</text>
+      <path class="brain-fold" d="M 450 95 Q 445 220 450 265 Q 455 330 450 420"/>
+      <path class="brain-fold" d="M 230 150 Q 255 165 255 190"/>
+      <path class="brain-fold" d="M 670 150 Q 645 165 645 190"/>
+      <path class="brain-fold" d="M 420 82 Q 450 92 480 82"/>
 
-      <circle id="lobe-semantic" class="lobe-circle" cx="450" cy="230" r="78" fill="var(--surface-raised)" stroke="var(--slate)" stroke-width="2"/>
-      <text x="450" y="230" text-anchor="middle" dominant-baseline="central" class="lobe-label">concepts</text>
-      <text x="450" y="323" text-anchor="middle" class="lobe-score" id="score-semantic">--</text>
+      <g clip-path="url(#brainClip)">
+        <circle id="lobe-long_term" class="lobe-circle" cx="280" cy="190" r="62" fill="var(--dormant-fill)" stroke="var(--dormant-stroke)" stroke-width="2"/>
+        <circle id="lobe-episodic" class="lobe-circle" cx="620" cy="190" r="62" fill="var(--dormant-fill)" stroke="var(--dormant-stroke)" stroke-width="2"/>
+        <circle id="lobe-semantic" class="lobe-circle" cx="450" cy="265" r="75" fill="var(--dormant-fill)" stroke="var(--dormant-stroke)" stroke-width="2"/>
+        <circle id="lobe-procedural" class="lobe-circle" cx="300" cy="360" r="52" fill="var(--dormant-fill)" stroke="var(--dormant-stroke)" stroke-width="2"/>
+        <circle id="lobe-short_term" class="lobe-circle" cx="600" cy="360" r="52" fill="var(--dormant-fill)" stroke="var(--dormant-stroke)" stroke-width="2"/>
+      </g>
 
-      <circle id="lobe-procedural" class="lobe-circle" cx="290" cy="330" r="60" fill="var(--surface-raised)" stroke="var(--slate)" stroke-width="2"/>
-      <text x="290" y="330" text-anchor="middle" dominant-baseline="central" class="lobe-label">playbook</text>
-      <text x="290" y="405" text-anchor="middle" class="lobe-score" id="score-procedural">--</text>
+      <text x="280" y="190" text-anchor="middle" dominant-baseline="central" class="lobe-label">identity</text>
+      <text x="280" y="272" text-anchor="middle" class="lobe-score" id="score-long_term">--</text>
 
-      <circle id="lobe-short_term" class="lobe-circle" cx="610" cy="330" r="60" fill="var(--surface-raised)" stroke="var(--slate)" stroke-width="2"/>
-      <text x="610" y="330" text-anchor="middle" dominant-baseline="central" class="lobe-label">working</text>
-      <text x="610" y="405" text-anchor="middle" class="lobe-score" id="score-short_term">--</text>
+      <text x="620" y="190" text-anchor="middle" dominant-baseline="central" class="lobe-label">timeline</text>
+      <text x="620" y="272" text-anchor="middle" class="lobe-score" id="score-episodic">--</text>
+
+      <text x="450" y="265" text-anchor="middle" dominant-baseline="central" class="lobe-label">concepts</text>
+      <text x="450" y="362" text-anchor="middle" class="lobe-score" id="score-semantic">--</text>
+
+      <text x="300" y="360" text-anchor="middle" dominant-baseline="central" class="lobe-label">playbook</text>
+      <text x="300" y="428" text-anchor="middle" class="lobe-score" id="score-procedural">--</text>
+
+      <text x="600" y="360" text-anchor="middle" dominant-baseline="central" class="lobe-label">working</text>
+      <text x="600" y="428" text-anchor="middle" class="lobe-score" id="score-short_term">--</text>
     </svg>
   </div>
 
@@ -217,19 +255,19 @@ function setLobeState(memoryType, score, selected) {
   scoreLabel.textContent = score.toFixed(3);
 
   const intensity = Math.min(score, 1);
-  const r = 58 + intensity * 143;   // slate (58,69,72) -> brass (201,138,59)
-  const g = 69 + intensity * 69;
-  const b = 72 - intensity * 13;
+  // dormant fill (245,246,241) -> active brass fill (232,185,114)
+  const r = 245 - intensity * 13;
+  const g = 246 - intensity * 61;
+  const b = 241 - intensity * 127;
   circle.setAttribute("fill", `rgb(${Math.round(r)}, ${Math.round(g)}, ${Math.round(b)})`);
-  circle.style.opacity = 0.35 + intensity * 0.65;
 
   if (selected) {
     circle.classList.add("selected");
-    circle.setAttribute("stroke", "var(--brass-bright)");
+    circle.setAttribute("stroke", "#8F5A14");
     circle.setAttribute("stroke-width", "3");
   } else {
     circle.classList.remove("selected");
-    circle.setAttribute("stroke", "var(--slate)");
+    circle.setAttribute("stroke", "#B8BEAF");
     circle.setAttribute("stroke-width", "2");
   }
 }

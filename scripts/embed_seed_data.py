@@ -194,7 +194,8 @@ def main():
             auth = PasswordAuthenticator(username, password)
 
         cluster = Cluster(conn_str, ClusterOptions(auth))
-        cluster.wait_until_ready(timeout=None)
+        from datetime import timedelta
+        cluster.wait_until_ready(timedelta(seconds=15))
 
     # ---- Process each seed target ----
     for target in SEED_TARGETS:

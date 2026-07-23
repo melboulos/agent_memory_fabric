@@ -111,15 +111,21 @@ def rescale_similarity(raw_similarity, floor=SIMILARITY_FLOOR, ceiling=SIMILARIT
 # Bedrock helpers
 # ===========================================================================
 def embed_text(bedrock_client, embed_model_id: str, text: str):
+    """Returns (vector, token_count). Titan's response includes
+    inputTextTokenCount directly -- no extra call needed to get it."""
     body = json.dumps({"inputText": text})
     response = bedrock_client.invoke_model(
         modelId=embed_model_id, body=body, accept="application/json", contentType="application/json"
     )
-    return json.loads(response["body"].read())["embedding"]
+    parsed = json.loads(response["body"].read())
+    return parsed["embedding"], parsed.get("inputTextTokenCount", 0)
 
 
 def invoke_llm(bedrock_client, llm_model_id: str, prompt: str, max_gen_len=800, temperature=0.2):
-    """Calls a Bedrock Llama 3 model with the required prompt formatting."""
+    """Calls a Bedrock Llama 3 model. Returns (generation_text, prompt_tokens,
+    generation_tokens) -- Llama 3's response includes both token counts
+    directly (prompt_token_count, generation_token_count), no extra call
+    needed to get them."""
     formatted_prompt = (
         f"<|begin_of_text|><|start_header_id|>user<|end_header_id|>\n"
         f"{prompt}\n<|eot_id|>\n<|start_header_id|>assistant<|end_header_id|>\n"
@@ -133,7 +139,8 @@ def invoke_llm(bedrock_client, llm_model_id: str, prompt: str, max_gen_len=800, 
     response = bedrock_client.invoke_model(
         modelId=llm_model_id, body=body, accept="application/json", contentType="application/json"
     )
-    return json.loads(response["body"].read())["generation"].strip()
+    parsed = json.loads(response["body"].read())
+    return parsed["generation"].strip(), parsed.get("prompt_token_count", 0), parsed.get("generation_token_count", 0)
 
 
 def parse_json_from_llm(raw_text: str):
@@ -221,7 +228,7 @@ with ONLY a JSON array, no other text, in this exact shape:
 ]
 Include an entry for every memory type listed above."""
 
-    raw = invoke_llm(bedrock_client, llm_model_id, prompt, max_gen_len=500, temperature=0.1)
+    raw, prompt_tokens, generation_tokens = invoke_llm(bedrock_client, llm_model_id, prompt, max_gen_len=500, temperature=0.1)
     decision = parse_json_from_llm(raw)
 
     # Defensive normalization: ensure every memory type has an entry, in
@@ -234,7 +241,7 @@ Include an entry for every memory type listed above."""
                 "selected": False,
                 "reason": "(no decision returned by LLM; defaulted to not selected)",
             }
-    return [decision_by_type[t] for t in MEMORY_TYPES]
+    return [decision_by_type[t] for t in MEMORY_TYPES], prompt_tokens, generation_tokens
 
 
 # ===========================================================================
@@ -639,6 +646,7 @@ def run(question, customer_id, session_id, cluster=None, bedrock_client=None):
     system_scope = cluster.bucket(bucket_name).scope("system_intelligence")
 
     timings = {}
+    token_usage = {}
     t_total_start = time.perf_counter()
 
     print(f"\n{'='*70}\nQUESTION: {question}\n{'='*70}")
@@ -648,8 +656,9 @@ def run(question, customer_id, session_id, cluster=None, bedrock_client=None):
     # separately for the identical text, which was a real, measurable waste
     # (one full embedding round-trip, ~200-400ms, for nothing).
     t0 = time.perf_counter()
-    question_vector = embed_text(bedrock_client, embed_model_id, question)
+    question_vector, embed_tokens = embed_text(bedrock_client, embed_model_id, question)
     timings["embed_question_ms"] = round((time.perf_counter() - t0) * 1000)
+    token_usage["embed_question"] = {"tokens": embed_tokens}
 
     # Stage 1: classify (evidence, not decision)
     print("\n--- Stage 1: Memory Attention Layer (classifier evidence) ---")
@@ -662,8 +671,11 @@ def run(question, customer_id, session_id, cluster=None, bedrock_client=None):
     # Stage 2: route (LLM decision)
     print("\n--- Stage 2: LLM Final Routing ---")
     t0 = time.perf_counter()
-    llm_decision = route_memories(bedrock_client, llm_model_id, question, classifier_candidates)
+    llm_decision, route_prompt_tokens, route_generation_tokens = route_memories(
+        bedrock_client, llm_model_id, question, classifier_candidates
+    )
     timings["route_ms"] = round((time.perf_counter() - t0) * 1000)
+    token_usage["route"] = {"prompt_tokens": route_prompt_tokens, "generation_tokens": route_generation_tokens}
     for d in llm_decision:
         flag = "SELECTED" if d["selected"] else "skipped "
         print(f"  [{flag}] {d['memory']:12s} {d['reason']}")
@@ -712,8 +724,11 @@ def run(question, customer_id, session_id, cluster=None, bedrock_client=None):
     # Stage 5: reason
     print("\n--- Stage 5: Reasoning ---")
     t0 = time.perf_counter()
-    answer = generate_answer(bedrock_client, llm_model_id, question, evidence_list)
+    answer, reason_prompt_tokens, reason_generation_tokens = generate_answer(
+        bedrock_client, llm_model_id, question, evidence_list
+    )
     timings["reason_ms"] = round((time.perf_counter() - t0) * 1000)
+    token_usage["reason"] = {"prompt_tokens": reason_prompt_tokens, "generation_tokens": reason_generation_tokens}
     print(f"\n{answer}\n")
 
     coverage = score_answer_coverage(evidence_list, answer)
@@ -724,7 +739,15 @@ def run(question, customer_id, session_id, cluster=None, bedrock_client=None):
         print(f"    [{flag:7s} importance={item['importance']:.3f}] {item['evidence_id']}")
 
     timings["total_ms"] = round((time.perf_counter() - t_total_start) * 1000)
+    token_usage["total_tokens"] = sum(
+        v.get("tokens", 0) + v.get("prompt_tokens", 0) + v.get("generation_tokens", 0)
+        for v in token_usage.values()
+        if isinstance(v, dict)
+    )
     print(f"\n  Timings (ms): " + ", ".join(f"{k}={v}" for k, v in timings.items()))
+    print(f"  Token usage: " + ", ".join(
+        f"{k}={v}" if not isinstance(v, dict) else f"{k}={v}" for k, v in token_usage.items()
+    ))
 
     return {
         "classifier_candidates": classifier_candidates,
@@ -735,6 +758,7 @@ def run(question, customer_id, session_id, cluster=None, bedrock_client=None):
         "coverage": coverage,
         "trace_id": trace_id,
         "timings": timings,
+        "token_usage": token_usage,
     }
 
 

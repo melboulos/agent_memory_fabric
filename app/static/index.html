@@ -311,6 +311,19 @@ function renderResults(data) {
     return `<span class="timing-chip ${slow}">${label}: <b>${ms}ms</b></span>`;
   }).join("");
 
+  const tok = data.token_usage || {};
+  const tokenChips = [];
+  if (tok.embed_question) {
+    tokenChips.push(`<span class="timing-chip">embed question: <b>${tok.embed_question.tokens}</b> tok</span>`);
+  }
+  if (tok.route) {
+    tokenChips.push(`<span class="timing-chip">route (LLM): <b>${tok.route.prompt_tokens}</b> in / <b>${tok.route.generation_tokens}</b> out</span>`);
+  }
+  if (tok.reason) {
+    tokenChips.push(`<span class="timing-chip">reason (LLM): <b>${tok.reason.prompt_tokens}</b> in / <b>${tok.reason.generation_tokens}</b> out</span>`);
+  }
+  const tokenHtml = tokenChips.join("");
+
   document.getElementById("results").innerHTML = `
     <div class="panel">
       <h2>Fused evidence</h2>
@@ -327,6 +340,10 @@ function renderResults(data) {
     <div class="panel">
       <h2>Timing (total: ${t.total_ms ?? '--'}ms)</h2>
       <div class="timing-row">${timingHtml}</div>
+    </div>
+    <div class="panel">
+      <h2>Token usage (total: ${tok.total_tokens ?? '--'})</h2>
+      <div class="timing-row">${tokenHtml}</div>
     </div>
     <div class="trace-id">Routing trace: ${data.trace_id}</div>
   `;

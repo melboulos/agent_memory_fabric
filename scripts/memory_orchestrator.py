@@ -107,7 +107,7 @@ def parse_json_from_llm(raw_text: str):
 # similarity scores per memory_type (max score per type, since a type may
 # have multiple labeled examples).
 # ===========================================================================
-def classify_intent(scope, bedrock_client, embed_model_id, question):
+def classify_intent(system_scope, bedrock_client, embed_model_id, question):
     vector = embed_text(bedrock_client, embed_model_id, question)
 
     prefilter = BooleanFieldQuery(True, field="active")
@@ -115,7 +115,7 @@ def classify_intent(scope, bedrock_client, embed_model_id, question):
     vector_search = VectorSearch.from_vector_query(vector_query)
     request = SearchRequest.create(MatchNoneQuery()).with_vector_search(vector_search)
 
-    result = scope.search(
+    result = system_scope.search(
         "memory_intent_patterns_vector_index",
         request,
         SearchOptions(fields=["memory_type", "logical_id"], limit=20),
@@ -470,12 +470,13 @@ def run(question, customer_id, session_id):
     cluster = Cluster(conn_str, ClusterOptions(auth))
     cluster.wait_until_ready(timedelta(seconds=15))
     knowledge_scope = cluster.bucket(bucket_name).scope("knowledge")
+    system_scope = cluster.bucket(bucket_name).scope("system_intelligence")
 
     print(f"\n{'='*70}\nQUESTION: {question}\n{'='*70}")
 
     # Stage 1: classify (evidence, not decision)
     print("\n--- Stage 1: Memory Attention Layer (classifier evidence) ---")
-    classifier_candidates = classify_intent(knowledge_scope, bedrock_client, embed_model_id, question)
+    classifier_candidates = classify_intent(system_scope, bedrock_client, embed_model_id, question)
     for memory_type, score in classifier_candidates.items():
         print(f"  {memory_type:12s} {score:.3f}")
 

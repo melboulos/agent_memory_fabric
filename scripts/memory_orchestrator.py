@@ -590,19 +590,25 @@ def write_routing_trace(cluster, bucket_name, session_id, question, classifier_c
 # ===========================================================================
 # Orchestration entry point
 # ===========================================================================
-def run(question, customer_id, session_id):
+def build_bedrock_client():
+    """Creates a fresh Bedrock runtime client. Called once at CLI invocation,
+    or once at FastAPI server startup -- never per-request."""
     bedrock_region = os.environ.get("BEDROCK_REGION")
-    embed_model_id = os.environ.get("EMBED_MODEL_ID")
-    llm_model_id = os.environ.get("LLM_MODEL_ID")
-    if not all([bedrock_region, embed_model_id, llm_model_id]):
-        sys.exit("Set BEDROCK_REGION, EMBED_MODEL_ID, and LLM_MODEL_ID before running.")
+    if not bedrock_region:
+        sys.exit("Set BEDROCK_REGION before running.")
+    return boto3.client("bedrock-runtime", region_name=bedrock_region)
 
-    bedrock_client = boto3.client("bedrock-runtime", region_name=bedrock_region)
 
+def build_couchbase_cluster():
+    """Connects to Couchbase and waits until ready. Called once at CLI
+    invocation, or once at FastAPI server startup -- never per-request.
+    Opening a new connection per request is both slow (every request pays
+    the connection setup cost) and fragile (a cold cluster can time out on
+    the very first attempt, exactly like the wait_until_ready timeout seen
+    earlier when running this script standalone)."""
     conn_str = os.environ.get("CB_CONN_STR")
     username = os.environ.get("CB_USERNAME")
     password = os.environ.get("CB_PASSWORD")
-    bucket_name = os.environ.get("CB_BUCKET", "agent_memory")
     ca_bundle = os.environ.get("CB_CA_BUNDLE")
 
     missing = [n for n, v in [("CB_CONN_STR", conn_str), ("CB_USERNAME", username), ("CB_PASSWORD", password)] if not v]
@@ -612,6 +618,25 @@ def run(question, customer_id, session_id):
     auth = PasswordAuthenticator(username, password, cert_path=ca_bundle) if ca_bundle else PasswordAuthenticator(username, password)
     cluster = Cluster(conn_str, ClusterOptions(auth))
     cluster.wait_until_ready(timedelta(seconds=15))
+    return cluster
+
+
+def run(question, customer_id, session_id, cluster=None, bedrock_client=None):
+    """cluster and bedrock_client are optional so the CLI (scripts/memory_orchestrator.py,
+    invoked once per run) can keep building them fresh each time, while the
+    FastAPI app builds them ONCE at server startup and passes the same
+    connections into every request instead of reconnecting every time."""
+    embed_model_id = os.environ.get("EMBED_MODEL_ID")
+    llm_model_id = os.environ.get("LLM_MODEL_ID")
+    if not all([embed_model_id, llm_model_id]):
+        sys.exit("Set EMBED_MODEL_ID and LLM_MODEL_ID before running.")
+
+    if bedrock_client is None:
+        bedrock_client = build_bedrock_client()
+    if cluster is None:
+        cluster = build_couchbase_cluster()
+
+    bucket_name = os.environ.get("CB_BUCKET", "agent_memory")
     knowledge_scope = cluster.bucket(bucket_name).scope("knowledge")
     system_scope = cluster.bucket(bucket_name).scope("system_intelligence")
 

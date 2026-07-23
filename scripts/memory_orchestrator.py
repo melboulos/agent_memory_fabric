@@ -491,13 +491,74 @@ def generate_answer(bedrock_client, llm_model_id, question, evidence_list):
 the evidence below. Do not invent facts not present in the evidence. If the
 evidence is insufficient, say so explicitly.
 
-Evidence:
+The evidence is listed in order of importance, highest first. Synthesize
+across ALL of it -- do not just restate the single most obvious point and
+ignore the rest. Your answer should reflect the higher-importance evidence
+first, and weave in supporting detail from lower-importance evidence where
+it adds something the top item doesn't already cover. If two items are
+closely related, connect them explicitly rather than listing them as
+separate, unrelated facts.
+
+Evidence (importance-ordered):
 {evidence_text}
 
 Question: "{question}"
 
 Answer:"""
     return invoke_llm(bedrock_client, llm_model_id, prompt, max_gen_len=400, temperature=0.3)
+
+
+# Common words excluded when checking whether an evidence item's distinctive
+# language shows up in the final answer -- without this, a word like "Acme"
+# (present in almost every piece of evidence) would falsely count as
+# "referenced" no matter which fact the answer actually used.
+_COVERAGE_STOPWORDS = {
+    "acme", "customer", "customers", "their", "with", "requires", "require",
+    "concerns", "concern", "about", "current", "considering", "consideration",
+    "because", "which", "would", "there", "these", "those",
+}
+
+
+def score_answer_coverage(evidence_list, answer_text):
+    """Mechanical, non-LLM check of whether the final answer actually used
+    the evidence it was given -- not a self-reported score from the model,
+    which would be unreliable. For each evidence item, checks what fraction
+    of its distinctive words (>4 chars, not in the stopword list above)
+    appear in the answer text. An item is 'referenced' if at least 20% of
+    its distinctive words show up.
+
+    Returns both a simple coverage ratio (fraction of items referenced) and
+    an importance-weighted coverage ratio (fraction of TOTAL IMPORTANCE that
+    was actually referenced) -- the weighted version is the one that
+    actually catches 'ignored the top-ranked fact', since missing a
+    high-importance item should count for more than missing a low one."""
+    answer_lower = answer_text.lower()
+    per_item = []
+
+    for e in evidence_list:
+        words = [w.strip(".,;:\"'()") for w in e["content"].lower().split()]
+        distinctive_words = [w for w in words if len(w) > 4 and w not in _COVERAGE_STOPWORDS]
+        if not distinctive_words:
+            per_item.append({"evidence_id": e["evidence_id"], "importance": e["importance"], "referenced": False, "match_ratio": 0.0})
+            continue
+        matches = sum(1 for w in distinctive_words if w in answer_lower)
+        match_ratio = matches / len(distinctive_words)
+        per_item.append({
+            "evidence_id": e["evidence_id"],
+            "importance": e["importance"],
+            "referenced": match_ratio >= 0.2,
+            "match_ratio": round(match_ratio, 3),
+        })
+
+    total_importance = sum(e["importance"] for e in evidence_list) or 1.0
+    referenced_importance = sum(i["importance"] for i in per_item if i["referenced"])
+    total_items = len(per_item) or 1
+
+    return {
+        "simple_coverage": round(sum(1 for i in per_item if i["referenced"]) / total_items, 3),
+        "importance_weighted_coverage": round(referenced_importance / total_importance, 3),
+        "per_item": per_item,
+    }
 
 
 # ===========================================================================
@@ -603,12 +664,20 @@ def run(question, customer_id, session_id):
     answer = generate_answer(bedrock_client, llm_model_id, question, evidence_list)
     print(f"\n{answer}\n")
 
+    coverage = score_answer_coverage(evidence_list, answer)
+    print(f"  Coverage: {coverage['simple_coverage']:.0%} of evidence items referenced, "
+          f"{coverage['importance_weighted_coverage']:.0%} of total importance covered")
+    for item in coverage["per_item"]:
+        flag = "used" if item["referenced"] else "IGNORED"
+        print(f"    [{flag:7s} importance={item['importance']:.3f}] {item['evidence_id']}")
+
     return {
         "classifier_candidates": classifier_candidates,
         "llm_decision": llm_decision,
         "evidence": evidence_list,
         "dropped_evidence": dropped_evidence,
         "answer": answer,
+        "coverage": coverage,
         "trace_id": trace_id,
     }
 

@@ -166,14 +166,16 @@ def classify_intent(system_scope, bedrock_client, embed_model_id, question):
     vector = embed_text(bedrock_client, embed_model_id, question)
 
     prefilter = BooleanFieldQuery(True, field="active")
-    vector_query = VectorQuery("embedding", vector, num_candidates=20, prefilter=prefilter)
+    # 30 covers headroom above the current 25 patterns (5 per memory type);
+    # bump this if the pattern set grows further.
+    vector_query = VectorQuery("embedding", vector, num_candidates=30, prefilter=prefilter)
     vector_search = VectorSearch.from_vector_query(vector_query)
     request = SearchRequest.create(MatchNoneQuery()).with_vector_search(vector_search)
 
     result = system_scope.search(
         "memory_intent_patterns_vector_index",
         request,
-        SearchOptions(fields=["memory_type", "logical_id"], limit=20),
+        SearchOptions(fields=["memory_type", "logical_id"], limit=30),
     )
 
     candidates = {memory_type: 0.0 for memory_type in MEMORY_TYPES}

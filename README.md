@@ -67,6 +67,16 @@ vector search), a richer Acme event timeline, a playbook matched to Acme's
 actual situation, and full classifier pattern coverage across every memory
 type.
 
+Then run `sql/expand_classifier_patterns.sql`, which brings
+`memory_intent_patterns` from 1 example per memory type up to 5 (matching
+the design spec's recommended 5-10 range). This was added after real
+testing surfaced a lexical-shortcut bug: with only one example per type,
+the classifier appeared to associate the literal word "Acme" with
+episodic intent (since that was the only example mentioning a customer
+name), scoring "Who is Acme?" as more episodic than long_term. The
+expanded set deliberately spreads customer-name mentions across multiple
+memory types to prevent this.
+
 ### 2. Generate real embeddings for the seed data
 
 `scripts/embed_seed_data.py` auto-discovers every document with an empty

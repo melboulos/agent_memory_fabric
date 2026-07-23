@@ -74,18 +74,33 @@ def main():
     vector_query = VectorQuery("embedding", vector, num_candidates=5, prefilter=prefilter)
     vector_search = VectorSearch.from_vector_query(vector_query)
 
-    t0 = time.perf_counter()
-    request = SearchRequest.create(MatchNoneQuery()).with_vector_search(vector_search)
-    result = scope.search(
-        "semantic_memory_vector_index",
-        request,
-        SearchOptions(fields=["fact", "content", "active", "logical_id"], limit=5),
-    )
-    rows = list(result.rows())  # force evaluation -- the SDK streams lazily, so
-                                 # the search hasn't actually finished until this
-    search_ms = round((time.perf_counter() - t0) * 1000)
-    print(f"Search completed. ({search_ms}ms)\n")
+    # Run the SAME search twice in this one process. Capella's own UI
+    # reported this exact query completing server-side in <1ms -- so if
+    # our client-measured "search" time is still seconds long, the cost
+    # is happening client-side, not on the cluster. Running it twice
+    # tests a specific theory: the SDK may lazily establish a
+    # Search-service-specific connection on the FIRST search call, even
+    # though cluster.wait_until_ready() already confirmed KV/bootstrap
+    # connectivity. If call #2 is dramatically faster than call #1, that
+    # confirms a one-time, per-process Search connection warmup cost --
+    # the same category of problem as the earlier per-request Couchbase
+    # connection issue, just specific to the Search service this time.
+    search_times = []
+    for attempt in (1, 2):
+        t0 = time.perf_counter()
+        request = SearchRequest.create(MatchNoneQuery()).with_vector_search(vector_search)
+        result = scope.search(
+            "semantic_memory_vector_index",
+            request,
+            SearchOptions(fields=["fact", "content", "active", "logical_id"], limit=5),
+        )
+        rows = list(result.rows())  # force evaluation -- the SDK streams lazily, so
+                                     # the search hasn't actually finished until this
+        elapsed_ms = round((time.perf_counter() - t0) * 1000)
+        search_times.append(elapsed_ms)
+        print(f"Search attempt {attempt} completed. ({elapsed_ms}ms)")
 
+    print()
     if not rows:
         print("No results. Check that the index has finished building and the seed doc has a real embedding.")
         return
@@ -94,7 +109,10 @@ def main():
         print(f"score={row.score:.4f}  id={row.id}")
         print(f"  fields: {row.fields}\n")
 
-    print(f"--- Summary: embed={embed_ms}ms  connect={connect_ms}ms  search={search_ms}ms  total={embed_ms+connect_ms+search_ms}ms ---")
+    search_ms = search_times[0]  # first-call time, for the summary line below
+    print(f"--- Summary: embed={embed_ms}ms  connect={connect_ms}ms  "
+          f"search_attempt_1={search_times[0]}ms  search_attempt_2={search_times[1]}ms  "
+          f"total={embed_ms+connect_ms+sum(search_times)}ms ---")
 
 
 if __name__ == "__main__":

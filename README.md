@@ -151,6 +151,28 @@ python scripts/memory_orchestrator.py \
   --session-id session_123
 ```
 
+### 4. Run the Memory Inspector UI
+
+A local web app wrapping the same orchestrator -- no logic duplicated, `app/main.py`
+imports `scripts/memory_orchestrator.py` directly. Ask a question, watch a
+labeled brain illustration light up per memory type (glow intensity =
+classifier score, solid highlight = actually selected by the LLM router),
+and see the routing decision, fused evidence (with dropped items shown
+struck through), the final answer, and the coverage score -- all in one
+page, no build step required.
+
+```bash
+pip install -r requirements.txt   # now includes fastapi + uvicorn
+
+# same env vars as the orchestrator (CB_CONN_STR, CB_USERNAME, CB_PASSWORD,
+# CB_CA_BUNDLE, BEDROCK_REGION, EMBED_MODEL_ID, LLM_MODEL_ID) must be set
+# in the same terminal before starting the server
+
+uvicorn app.main:app --reload
+```
+
+Then open **http://127.0.0.1:8000** in a browser.
+
 ## Status
 
 - [x] Design spec (v2, locked)
@@ -158,5 +180,5 @@ python scripts/memory_orchestrator.py \
 - [x] Vector search indexes (validated against a live cluster)
 - [x] Seed embedding generation script (auto-discovers docs needing embeddings)
 - [x] Richer seed dataset (decoy customer, event timeline, matched playbook, full classifier pattern coverage)
-- [x] Memory Orchestrator (classifier, routing, retrieval, fusion, reasoning)
-- [ ] Memory Inspector / Agent Brain visualization UI
+- [x] Memory Orchestrator (classifier, routing, retrieval, fusion, reasoning) -- validated end to end across all five memory types
+- [x] Memory Inspector / Agent Brain visualization UI

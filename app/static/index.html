@@ -1,0 +1,333 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Agent Memory Fabric</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600&family=IBM+Plex+Sans:wght@400;500&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #14181A;
+    --surface: #1E2427;
+    --surface-raised: #262D30;
+    --ink: #E8E6DE;
+    --ink-dim: #9BA3A0;
+    --ink-faint: #5B615F;
+    --slate: #3A4548;
+    --brass: #C98A3B;
+    --brass-bright: #E0A75E;
+    --teal: #5FA8A0;
+    --brick: #B85450;
+    --border: #2B3336;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--ink);
+    font-family: 'IBM Plex Sans', sans-serif;
+    line-height: 1.6;
+  }
+  .wrap { max-width: 1040px; margin: 0 auto; padding: 40px 24px 80px; }
+  h1 {
+    font-family: 'Fraunces', serif;
+    font-weight: 500;
+    font-size: 32px;
+    margin: 0 0 4px;
+    letter-spacing: -0.01em;
+  }
+  .subtitle {
+    color: var(--ink-dim);
+    font-size: 15px;
+    margin: 0 0 32px;
+  }
+  .console {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 20px;
+    display: flex;
+    gap: 12px;
+    align-items: center;
+    flex-wrap: wrap;
+    margin-bottom: 40px;
+  }
+  .console input[type=text], .console select {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    color: var(--ink);
+    border-radius: 6px;
+    padding: 10px 12px;
+    font-family: 'IBM Plex Sans', sans-serif;
+    font-size: 14px;
+  }
+  .console input[type=text] { flex: 1; min-width: 260px; }
+  .console button {
+    background: var(--brass);
+    color: #1A1408;
+    border: none;
+    border-radius: 6px;
+    padding: 10px 20px;
+    font-family: 'IBM Plex Sans', sans-serif;
+    font-weight: 500;
+    font-size: 14px;
+    cursor: pointer;
+    transition: background 0.15s;
+  }
+  .console button:hover { background: var(--brass-bright); }
+  .console button:disabled { background: var(--ink-faint); cursor: not-allowed; }
+  .label { font-size: 12px; color: var(--ink-dim); margin-right: 4px; }
+
+  .brain-section { position: relative; margin-bottom: 48px; }
+  .brain-section h2, .panel h2 {
+    font-family: 'Fraunces', serif;
+    font-weight: 500;
+    font-size: 18px;
+    margin: 0 0 16px;
+  }
+  #brain-svg { width: 100%; height: auto; display: block; }
+  .lobe-circle { transition: filter 0.6s ease, stroke 0.4s ease, stroke-width 0.4s ease; }
+  .lobe-circle.selected { animation: pulse 1.8s ease-in-out infinite; }
+  @keyframes pulse {
+    0%, 100% { filter: drop-shadow(0 0 6px var(--brass)); }
+    50% { filter: drop-shadow(0 0 16px var(--brass-bright)); }
+  }
+  .lobe-label { font-family: 'IBM Plex Mono', monospace; font-size: 12px; fill: var(--ink-dim); }
+  .lobe-score { font-family: 'IBM Plex Mono', monospace; font-size: 11px; fill: var(--ink-faint); }
+
+  .panel {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 20px 24px;
+    margin-bottom: 20px;
+  }
+  .route-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 8px 0;
+    border-bottom: 1px solid var(--border);
+    font-size: 14px;
+  }
+  .route-row:last-child { border-bottom: none; }
+  .route-tag {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 11px;
+    padding: 2px 8px;
+    border-radius: 4px;
+  }
+  .route-tag.selected { background: rgba(201,138,59,0.18); color: var(--brass-bright); }
+  .route-tag.skipped { background: transparent; color: var(--ink-faint); }
+
+  .evidence-item { margin-bottom: 14px; }
+  .evidence-top { display: flex; justify-content: space-between; font-size: 13px; margin-bottom: 6px; }
+  .evidence-type { color: var(--ink-dim); font-family: 'IBM Plex Mono', monospace; font-size: 11px; }
+  .evidence-importance { font-family: 'IBM Plex Mono', monospace; font-size: 12px; color: var(--brass-bright); }
+  .evidence-content { font-size: 14px; margin-bottom: 6px; }
+  .bar-track { background: var(--bg); border-radius: 4px; height: 6px; overflow: hidden; }
+  .bar-fill { height: 100%; background: var(--brass); border-radius: 4px; }
+  .evidence-item.dropped .evidence-content { color: var(--ink-faint); text-decoration: line-through; }
+  .evidence-item.dropped .bar-fill { background: var(--brick); }
+
+  .answer-box {
+    font-family: 'Fraunces', serif;
+    font-size: 17px;
+    line-height: 1.7;
+    color: var(--ink);
+    padding: 4px 0;
+  }
+  .coverage-row { display: flex; gap: 24px; margin-top: 16px; }
+  .coverage-stat { font-size: 13px; color: var(--ink-dim); }
+  .coverage-stat b { color: var(--ink); font-family: 'IBM Plex Mono', monospace; font-weight: 500; }
+
+  .trace-id { font-family: 'IBM Plex Mono', monospace; font-size: 11px; color: var(--ink-faint); margin-top: 24px; }
+  .empty-state { color: var(--ink-faint); font-size: 14px; padding: 24px 0; text-align: center; }
+  .error-box { background: rgba(184,84,80,0.12); border: 1px solid var(--brick); color: #E8A6A3; border-radius: 8px; padding: 14px 18px; font-size: 14px; margin-bottom: 20px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Agent memory fabric</h1>
+  <p class="subtitle">Watch the agent think -- ask a question and see which memory regions activate.</p>
+
+  <div class="console">
+    <span class="label">Customer</span>
+    <select id="customerSelect">
+      <option value="acme_001">Acme Corporation</option>
+      <option value="northstar_health_002">NorthStar Health Partners</option>
+    </select>
+    <input type="text" id="questionInput" placeholder="Why are they considering migration?" value="Why are they considering migration?">
+    <button id="askButton" onclick="ask()">Ask</button>
+  </div>
+
+  <div class="brain-section">
+    <h2>Memory activation</h2>
+    <svg id="brain-svg" viewBox="0 0 900 420" xmlns="http://www.w3.org/2000/svg">
+      <path d="M 450 30
+               C 320 20, 200 70, 160 160
+               C 120 240, 150 320, 240 360
+               C 300 390, 380 400, 450 395
+               C 520 400, 600 390, 660 360
+               C 750 320, 780 240, 740 160
+               C 700 70, 580 20, 450 30 Z"
+            fill="none" stroke="var(--slate)" stroke-width="1.5" stroke-dasharray="3 4"/>
+
+      <circle id="lobe-long_term" class="lobe-circle" cx="290" cy="150" r="70" fill="var(--surface-raised)" stroke="var(--slate)" stroke-width="2"/>
+      <text x="290" y="150" text-anchor="middle" dominant-baseline="central" class="lobe-label">identity</text>
+      <text x="290" y="235" text-anchor="middle" class="lobe-score" id="score-long_term">--</text>
+
+      <circle id="lobe-episodic" class="lobe-circle" cx="610" cy="150" r="70" fill="var(--surface-raised)" stroke="var(--slate)" stroke-width="2"/>
+      <text x="610" y="150" text-anchor="middle" dominant-baseline="central" class="lobe-label">timeline</text>
+      <text x="610" y="235" text-anchor="middle" class="lobe-score" id="score-episodic">--</text>
+
+      <circle id="lobe-semantic" class="lobe-circle" cx="450" cy="230" r="78" fill="var(--surface-raised)" stroke="var(--slate)" stroke-width="2"/>
+      <text x="450" y="230" text-anchor="middle" dominant-baseline="central" class="lobe-label">concepts</text>
+      <text x="450" y="323" text-anchor="middle" class="lobe-score" id="score-semantic">--</text>
+
+      <circle id="lobe-procedural" class="lobe-circle" cx="290" cy="330" r="60" fill="var(--surface-raised)" stroke="var(--slate)" stroke-width="2"/>
+      <text x="290" y="330" text-anchor="middle" dominant-baseline="central" class="lobe-label">playbook</text>
+      <text x="290" y="405" text-anchor="middle" class="lobe-score" id="score-procedural">--</text>
+
+      <circle id="lobe-short_term" class="lobe-circle" cx="610" cy="330" r="60" fill="var(--surface-raised)" stroke="var(--slate)" stroke-width="2"/>
+      <text x="610" y="330" text-anchor="middle" dominant-baseline="central" class="lobe-label">working</text>
+      <text x="610" y="405" text-anchor="middle" class="lobe-score" id="score-short_term">--</text>
+    </svg>
+  </div>
+
+  <div id="results">
+    <div class="empty-state">Ask a question to see the memory pipeline run.</div>
+  </div>
+</div>
+
+<script>
+const MEMORY_LABELS = {
+  long_term: "Long-term (identity)",
+  episodic: "Episodic (timeline)",
+  semantic: "Semantic (concepts)",
+  procedural: "Procedural (playbook)",
+  short_term: "Short-term (working)"
+};
+
+function setLobeState(memoryType, score, selected) {
+  const circle = document.getElementById(`lobe-${memoryType}`);
+  const scoreLabel = document.getElementById(`score-${memoryType}`);
+  scoreLabel.textContent = score.toFixed(3);
+
+  const intensity = Math.min(score, 1);
+  const r = 58 + intensity * 143;   // slate (58,69,72) -> brass (201,138,59)
+  const g = 69 + intensity * 69;
+  const b = 72 - intensity * 13;
+  circle.setAttribute("fill", `rgb(${Math.round(r)}, ${Math.round(g)}, ${Math.round(b)})`);
+  circle.style.opacity = 0.35 + intensity * 0.65;
+
+  if (selected) {
+    circle.classList.add("selected");
+    circle.setAttribute("stroke", "var(--brass-bright)");
+    circle.setAttribute("stroke-width", "3");
+  } else {
+    circle.classList.remove("selected");
+    circle.setAttribute("stroke", "var(--slate)");
+    circle.setAttribute("stroke-width", "2");
+  }
+}
+
+function resetBrain() {
+  Object.keys(MEMORY_LABELS).forEach(t => setLobeState(t, 0, false));
+}
+
+async function ask() {
+  const question = document.getElementById("questionInput").value.trim();
+  const customerId = document.getElementById("customerSelect").value;
+  const button = document.getElementById("askButton");
+  const results = document.getElementById("results");
+
+  if (!question) return;
+
+  button.disabled = true;
+  button.textContent = "Thinking...";
+  resetBrain();
+  results.innerHTML = '<div class="empty-state">Running classify &rarr; route &rarr; retrieve &rarr; fuse &rarr; reason...</div>';
+
+  try {
+    const resp = await fetch("/ask", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ question, customer_id: customerId, session_id: "session_123" })
+    });
+    const data = await resp.json();
+
+    if (!resp.ok) {
+      results.innerHTML = `<div class="error-box">${data.detail || "Something went wrong."}</div>`;
+      return;
+    }
+
+    renderResults(data);
+  } catch (err) {
+    results.innerHTML = `<div class="error-box">Could not reach the server: ${err.message}</div>`;
+  } finally {
+    button.disabled = false;
+    button.textContent = "Ask";
+  }
+}
+
+function renderResults(data) {
+  const selectedTypes = new Set(data.llm_decision.filter(d => d.selected).map(d => d.memory));
+  Object.entries(data.classifier_candidates).forEach(([type, score]) => {
+    setLobeState(type, score, selectedTypes.has(type));
+  });
+
+  const routingHtml = data.llm_decision.map(d => `
+    <div class="route-row">
+      <span>${MEMORY_LABELS[d.memory] || d.memory} &mdash; ${d.reason}</span>
+      <span class="route-tag ${d.selected ? 'selected' : 'skipped'}">${d.selected ? 'selected' : 'skipped'}</span>
+    </div>
+  `).join("");
+
+  const allEvidence = [...data.evidence.map(e => ({...e, dropped: false})),
+                       ...data.dropped_evidence.map(e => ({...e, dropped: true}))];
+  allEvidence.sort((a, b) => b.importance - a.importance);
+
+  const evidenceHtml = allEvidence.map(e => `
+    <div class="evidence-item ${e.dropped ? 'dropped' : ''}">
+      <div class="evidence-top">
+        <span class="evidence-type">${e.memory_type}${e.dropped ? ' -- dropped (below relevance threshold)' : ''}</span>
+        <span class="evidence-importance">${e.importance.toFixed(3)}</span>
+      </div>
+      <div class="evidence-content">${e.content}</div>
+      <div class="bar-track"><div class="bar-fill" style="width:${Math.round(e.importance * 100)}%"></div></div>
+    </div>
+  `).join("");
+
+  const coverage = data.coverage;
+  const coverageItemsHtml = coverage.per_item.map(i => `
+    <span class="coverage-stat">${i.evidence_id}: <b>${i.referenced ? 'used' : 'ignored'}</b></span>
+  `).join(" &nbsp;&nbsp; ");
+
+  document.getElementById("results").innerHTML = `
+    <div class="panel">
+      <h2>Routing decision</h2>
+      ${routingHtml}
+    </div>
+    <div class="panel">
+      <h2>Fused evidence</h2>
+      ${evidenceHtml || '<div class="empty-state">No evidence retrieved.</div>'}
+    </div>
+    <div class="panel">
+      <h2>Answer</h2>
+      <div class="answer-box">${data.answer}</div>
+      <div class="coverage-row">
+        <span class="coverage-stat">Coverage: <b>${Math.round(coverage.simple_coverage * 100)}%</b> of items, <b>${Math.round(coverage.importance_weighted_coverage * 100)}%</b> of importance</span>
+      </div>
+      <div style="margin-top:8px">${coverageItemsHtml}</div>
+    </div>
+    <div class="trace-id">Routing trace: ${data.trace_id}</div>
+  `;
+}
+
+resetBrain();
+</script>
+</body>
+</html>

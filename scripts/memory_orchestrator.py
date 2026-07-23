@@ -491,15 +491,21 @@ def generate_answer(bedrock_client, llm_model_id, question, evidence_list):
 the evidence below. Do not invent facts not present in the evidence. If the
 evidence is insufficient, say so explicitly.
 
-The evidence is listed in order of importance, highest first. Synthesize
-across ALL of it -- do not just restate the single most obvious point and
-ignore the rest. Your answer should reflect the higher-importance evidence
-first, and weave in supporting detail from lower-importance evidence where
-it adds something the top item doesn't already cover. If two items are
-closely related, connect them explicitly rather than listing them as
-separate, unrelated facts.
+The evidence is listed in order of importance, highest first, with an
+internal importance score next to each item -- that score is for YOUR
+reasoning only. Never mention the words "importance" or any numeric score
+in your answer; the person reading it should never see this internal
+bookkeeping.
 
-Evidence (importance-ordered):
+Synthesize across ALL of it into ONE cohesive narrative, not a separate
+paragraph per evidence item. Give more weight to higher-importance
+evidence, and connect related items into a single explanation rather than
+listing them one after another (e.g. tie a compliance requirement and an
+executive sign-off requirement together as "this is a strategic,
+compliance-driven decision" rather than describing them in two disconnected
+sentences).
+
+Evidence (importance-ordered; scores are internal only, never repeat them):
 {evidence_text}
 
 Question: "{question}"

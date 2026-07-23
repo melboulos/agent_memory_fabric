@@ -2,24 +2,25 @@
 """
 embed_seed_data.py
 
-Generates real embeddings for the two seed documents created in
-capella_agent_memory_setup.sql (Section 5) and writes them back into
-Capella, replacing the placeholder empty `embedding` arrays.
+Finds every document with an empty `embedding` array across the two
+vector-backed collections (semantic_memory, memory_intent_patterns) and
+fills it in with a real vector from AWS Bedrock Titan.
 
-This is a one-time FILL, not a promotion. Both seed docs were inserted as
-generation 1 / active = true with no usable vector yet — this script
-completes generation 1, it does not create generation 2. The immutable
-generation / promotion workflow (design spec Section 10.3) applies to
-FUTURE re-embeddings (e.g. a model upgrade), not to this initial fill.
+This replaces an earlier version of this script that only knew about two
+hardcoded documents. As you seed more data over time (new customers,
+events, facts, classifier patterns), this version finds all of them
+automatically via a SQL++ query instead of needing a new hardcoded entry
+for every document.
+
+This is a one-time FILL, not a promotion. Every document processed here is
+still at generation 1 / active = true with no usable vector yet — filling
+that in is not the same as the immutable generation / promotion workflow
+(design spec Section 10.3), which applies to FUTURE re-embeddings (e.g. a
+model upgrade of documents that already have a real vector).
 
 Embedding provider: AWS Bedrock, Amazon Titan Text Embeddings G1
 (amazon.titan-embed-text-v1) — fixed 1536-dim output, matches the dims
-already configured on both Capella vector search indexes. No index rebuild
-needed when switching to this provider.
-
-Targets:
-  - agent_memory.knowledge.semantic_memory                 -> semantic_fact_456_v1
-  - agent_memory.system_intelligence.memory_intent_patterns -> episodic_pattern_001_v1
+already configured on both Capella vector search indexes.
 
 Usage:
   export CB_CONN_STR="couchbases://cb.<your-cluster>.cloud.couchbase.com"
@@ -31,11 +32,14 @@ Usage:
   export CB_CA_BUNDLE=/path/to/vectorcluster-root-certificate.txt   # optional
 
   # AWS credentials: use whatever your environment already has configured
-  # (aws configure, AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY env vars, or an
-  # assumed role) — boto3 picks these up automatically, nothing to set here.
+  # (aws configure, AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY, or an assumed
+  # role) — boto3 picks these up automatically, nothing to set here.
 
-  python embed_seed_data.py            # generates + writes
-  python embed_seed_data.py --dry-run  # generates + prints, writes nothing
+  python scripts/embed_seed_data.py            # finds + writes real vectors
+  python scripts/embed_seed_data.py --dry-run  # finds + generates + prints,
+                                                # writes nothing (still reads
+                                                # from Couchbase, since
+                                                # discovery needs a live query)
 
 Requirements:
   pip install boto3 couchbase --break-system-packages
@@ -45,11 +49,7 @@ import argparse
 import json
 import os
 import sys
-from datetime import datetime, timezone
-
-EMBEDDING_DIMENSION = 1536  # fixed for amazon.titan-embed-text-v1; must match
-                             # embedding_metadata.dimension already recorded
-                             # on both seed documents
+from datetime import datetime, timedelta, timezone
 
 
 # ---------------------------------------------------------------------------
@@ -62,8 +62,7 @@ EMBEDDING_DIMENSION = 1536  # fixed for amazon.titan-embed-text-v1; must match
 # returns the vector and a token count. So `actual_model` here is the model
 # ID we explicitly requested (EMBED_MODEL_ID), not something independently
 # confirmed by the API response. The dimension check is the part doing real
-# work; the model check mainly guards against config drift (e.g. someone
-# changes EMBED_MODEL_ID without updating the document's expected_model).
+# work; the model check mainly guards against config drift.
 # ---------------------------------------------------------------------------
 def validate_embedding_compatibility(vector, expected_model, expected_dimension, actual_model):
     if actual_model != expected_model:
@@ -93,44 +92,41 @@ def generate_embedding(bedrock_client, model_id: str, text: str):
 
 
 # ---------------------------------------------------------------------------
-# The two seed targets. Each entry says which collection/key to update, what
-# text to embed, and the model/dimension already recorded in that document's
-# embedding_metadata (so we can validate against it, not just assume it).
-#
-# NOTE: the live seed documents currently have embedding_metadata.model set
-# to "text-embedding-3-small" (a placeholder from before the provider was
-# decided). This script's expected_model below is the CORRECT value
-# (amazon.titan-embed-text-v1) — it will overwrite embedding_metadata.model
-# to match reality when it writes the real vector. See the companion
-# sql/fix_embedding_metadata.sql for a standalone correction if you want to
-# fix the metadata without waiting on this script.
+# The two vector-backed collections and how to build embeddable text from
+# each document shape. Add a new entry here if a new vector-backed
+# collection is introduced later — no per-document hardcoding needed.
 # ---------------------------------------------------------------------------
-SEED_TARGETS = [
+VECTOR_BACKED_COLLECTIONS = [
     {
-        "label": "semantic_memory: semantic_fact_456_v1",
+        "label": "semantic_memory",
         "scope": "knowledge",
         "collection": "semantic_memory",
-        "key": "semantic_fact_456_v1",
         "text_fn": lambda doc: f"{doc['fact']}. {doc['content']}",
-        # Known seed text (matches capella_agent_memory_setup.sql Section 5.4)
-        # used only in --dry-run mode, where we don't read the live document.
-        "dry_run_text": (
-            "Acme has scalability concerns with their current architecture. "
-            "Acme requires higher throughput and predictable latency for payment processing"
-        ),
         "expected_dimension": 1536,
     },
     {
-        "label": "memory_intent_patterns: episodic_pattern_001_v1",
+        "label": "memory_intent_patterns",
         "scope": "system_intelligence",
         "collection": "memory_intent_patterns",
-        "key": "episodic_pattern_001_v1",
         "text_fn": lambda doc: doc["question_text"],
-        # Known seed text (matches capella_agent_memory_setup.sql Section 5.8)
-        "dry_run_text": "What happened in our last meeting with Acme?",
         "expected_dimension": 1536,
     },
 ]
+
+
+def find_docs_needing_embeddings(cluster, bucket_name, scope_name, collection_name):
+    """Returns [(doc_id, doc_dict), ...] for every doc with an empty embedding."""
+    query = f"""
+        SELECT META(t).id AS __id, t.*
+        FROM `{bucket_name}`.`{scope_name}`.`{collection_name}` AS t
+        WHERE ARRAY_LENGTH(t.embedding) = 0
+    """
+    result = cluster.query(query)
+    docs = []
+    for row in result:
+        doc_id = row.pop("__id")
+        docs.append((doc_id, row))
+    return docs
 
 
 def get_couchbase_collection(cluster, bucket_name, scope_name, collection_name):
@@ -143,7 +139,7 @@ def main():
     parser.add_argument(
         "--dry-run",
         action="store_true",
-        help="Generate embeddings and print vector stats, but do not write to Capella.",
+        help="Find docs and generate embeddings, but do not write anything back to Capella.",
     )
     args = parser.parse_args()
 
@@ -160,94 +156,81 @@ def main():
 
     bedrock_client = boto3.client("bedrock-runtime", region_name=bedrock_region)
 
-    # ---- Couchbase connection (skipped entirely in --dry-run) ----
-    cluster = None
-    if not args.dry_run:
-        try:
-            from couchbase.cluster import Cluster
-            from couchbase.options import ClusterOptions
-            from couchbase.auth import PasswordAuthenticator
-        except ImportError:
-            sys.exit("Missing dependency: pip install couchbase --break-system-packages")
+    # ---- Couchbase connection (required even in --dry-run, since finding
+    # docs that need embeddings means querying live data) ----
+    try:
+        from couchbase.cluster import Cluster
+        from couchbase.options import ClusterOptions
+        from couchbase.auth import PasswordAuthenticator
+    except ImportError:
+        sys.exit("Missing dependency: pip install couchbase --break-system-packages")
 
-        conn_str = os.environ.get("CB_CONN_STR")
-        username = os.environ.get("CB_USERNAME")
-        password = os.environ.get("CB_PASSWORD")
-        bucket_name = os.environ.get("CB_BUCKET", "agent_memory")
-        ca_bundle = os.environ.get("CB_CA_BUNDLE")  # optional
+    conn_str = os.environ.get("CB_CONN_STR")
+    username = os.environ.get("CB_USERNAME")
+    password = os.environ.get("CB_PASSWORD")
+    bucket_name = os.environ.get("CB_BUCKET", "agent_memory")
+    ca_bundle = os.environ.get("CB_CA_BUNDLE")  # optional
 
-        missing = [
-            name
-            for name, val in [("CB_CONN_STR", conn_str), ("CB_USERNAME", username), ("CB_PASSWORD", password)]
-            if not val
-        ]
-        if missing:
-            sys.exit(f"Missing required environment variables: {', '.join(missing)}")
+    missing = [
+        name
+        for name, val in [("CB_CONN_STR", conn_str), ("CB_USERNAME", username), ("CB_PASSWORD", password)]
+        if not val
+    ]
+    if missing:
+        sys.exit(f"Missing required environment variables: {', '.join(missing)}")
 
-        # cert_path is optional — the Python SDK bundles Capella's standard
-        # root cert by default (SDK 4.1+), so couchbases:// alone often works
-        # without this. Only needed for non-standard networking (VPC
-        # peering, private endpoints, custom-issued certs).
-        if ca_bundle:
-            auth = PasswordAuthenticator(username, password, cert_path=ca_bundle)
-        else:
-            auth = PasswordAuthenticator(username, password)
+    # cert_path is optional — the Python SDK bundles Capella's standard root
+    # cert by default (SDK 4.1+), so couchbases:// alone often works without
+    # this. Only needed for non-standard networking.
+    if ca_bundle:
+        auth = PasswordAuthenticator(username, password, cert_path=ca_bundle)
+    else:
+        auth = PasswordAuthenticator(username, password)
 
-        cluster = Cluster(conn_str, ClusterOptions(auth))
-        from datetime import timedelta
-        cluster.wait_until_ready(timedelta(seconds=15))
+    cluster = Cluster(conn_str, ClusterOptions(auth))
+    cluster.wait_until_ready(timedelta(seconds=15))
 
-    # ---- Process each seed target ----
-    for target in SEED_TARGETS:
+    total_written = 0
+
+    for target in VECTOR_BACKED_COLLECTIONS:
         print(f"\n--- {target['label']} ---")
 
-        if args.dry_run:
-            text_to_embed = target["dry_run_text"]
-            print("(dry-run: using known seed text, no Couchbase read)")
-            print(f"Embedding text: {text_to_embed!r}")
+        pending = find_docs_needing_embeddings(cluster, bucket_name, target["scope"], target["collection"])
+        if not pending:
+            print("Nothing to do — no documents with an empty embedding.")
+            continue
+
+        print(f"Found {len(pending)} document(s) needing an embedding.")
+        collection = get_couchbase_collection(cluster, bucket_name, target["scope"], target["collection"])
+
+        for doc_id, doc in pending:
+            text_to_embed = target["text_fn"](doc)
+            print(f"\n  {doc_id}")
+            print(f"  Embedding text: {text_to_embed!r}")
 
             vector, actual_model = generate_embedding(bedrock_client, embed_model_id, text_to_embed)
+
             validate_embedding_compatibility(
                 vector,
                 expected_model=embed_model_id,
                 expected_dimension=target["expected_dimension"],
                 actual_model=actual_model,
             )
-            print(f"Generated {len(vector)}-dim vector using {actual_model}. Compatibility check passed.")
-            print("(--dry-run: not writing to Capella)")
-            continue
+            print(f"  Generated {len(vector)}-dim vector using {actual_model}. Compatibility check passed.")
 
-        collection = get_couchbase_collection(
-            cluster, os.environ.get("CB_BUCKET", "agent_memory"), target["scope"], target["collection"]
-        )
+            if args.dry_run:
+                print("  (--dry-run: not writing to Capella)")
+                continue
 
-        get_result = collection.get(target["key"])
-        doc = get_result.content_as[dict]
+            doc["embedding"] = vector
+            doc["embedding_metadata"]["model"] = actual_model
+            doc["embedding_metadata"]["dimension"] = len(vector)
+            doc["embedding_metadata"]["generated_at"] = datetime.now(timezone.utc).isoformat()
+            collection.upsert(doc_id, doc)
+            total_written += 1
+            print(f"  Wrote embedding to {target['scope']}.{target['collection']}::{doc_id}")
 
-        text_to_embed = target["text_fn"](doc)
-        print(f"Embedding text: {text_to_embed!r}")
-
-        vector, actual_model = generate_embedding(bedrock_client, embed_model_id, text_to_embed)
-
-        validate_embedding_compatibility(
-            vector,
-            expected_model=embed_model_id,
-            expected_dimension=target["expected_dimension"],
-            actual_model=actual_model,
-        )
-
-        print(f"Generated {len(vector)}-dim vector using {actual_model}. Compatibility check passed.")
-
-        doc["embedding"] = vector
-        doc["embedding_metadata"]["model"] = actual_model
-        doc["embedding_metadata"]["dimension"] = len(vector)
-        doc["embedding_metadata"]["generated_at"] = datetime.now(timezone.utc).isoformat()
-        collection.upsert(target["key"], doc)
-        print(f"Wrote embedding to {target['scope']}.{target['collection']}::{target['key']}")
-
-    print("\nDone.")
-    if args.dry_run:
-        print("This was a dry run — nothing was written to Capella. Re-run without --dry-run to persist.")
+    print(f"\nDone. {'(dry run -- nothing written)' if args.dry_run else f'{total_written} document(s) updated.'}")
 
 
 if __name__ == "__main__":

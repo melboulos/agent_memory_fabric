@@ -61,12 +61,20 @@ Section 6 of that file is JSON reference for the two Search Vector Indexes
 these must be created via Capella UI → Data Tools → Search, or the Search
 Service REST API, not SQL++.
 
+Once the base data model is in, run `sql/seed_additional_data.sql` for a
+fuller dataset: a second, unrelated customer (a discrimination test for
+vector search), a richer Acme event timeline, a playbook matched to Acme's
+actual situation, and full classifier pattern coverage across every memory
+type.
+
 ### 2. Generate real embeddings for the seed data
 
-The SQL script inserts two vector-backed seed documents with placeholder
-empty embeddings. Populate them with real vectors using AWS Bedrock
-(Amazon Titan Text Embeddings G1 — fixed 1536-dim output, matches the
-vector index dimensions already configured):
+`scripts/embed_seed_data.py` auto-discovers every document with an empty
+`embedding` array across both vector-backed collections and fills them in
+using AWS Bedrock (Amazon Titan Text Embeddings G1 — fixed 1536-dim
+output, matches the vector index dimensions already configured). Re-run it
+any time you add new documents; it only touches ones that still need
+embedding:
 
 ```bash
 pip install -r requirements.txt
@@ -84,13 +92,28 @@ export CB_CA_BUNDLE=/path/to/vectorcluster-root-certificate.txt   # optional —
 # AWS credentials picked up automatically from your environment
 # (aws configure / AWS_ACCESS_KEY_ID + AWS_SECRET_ACCESS_KEY / assumed role)
 
-python scripts/embed_seed_data.py --dry-run   # sanity check, writes nothing
-python scripts/embed_seed_data.py             # writes real vectors
+python scripts/embed_seed_data.py --dry-run   # finds + generates, writes nothing
+python scripts/embed_seed_data.py             # finds + writes real vectors
 ```
 
 If you'd rather correct the seed documents' `embedding_metadata.model`
 (currently a leftover placeholder value) independently of running the
 script, see `sql/fix_embedding_metadata.sql`.
+
+### 3. Confirm vector search actually discriminates
+
+`scripts/test_vector_search.py` embeds a query and runs it against
+`semantic_memory_vector_index` with an `active=true` pre-filter, printing
+similarity scores. With the additional seed data in place, try a query
+that should match Acme (e.g. about database scalability) and one that
+should match the decoy customer instead (e.g. about HIPAA compliance) to
+confirm results are being ranked by actual meaning, not just returned
+indiscriminately:
+
+```bash
+python scripts/test_vector_search.py "why is a customer worried about database performance"
+python scripts/test_vector_search.py "what are this customer's compliance requirements"
+```
 
 ### 3. Application layer (in progress)
 

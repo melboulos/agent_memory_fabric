@@ -5,8 +5,17 @@ memory_orchestrator.py
 Implements the full pipeline from the design spec (Sections 9-11):
 
     classify (evidence)  ->  route (LLM decision)  ->  retrieve (per memory
-    type)  ->  fuse (normalize + provenance-link + rank)  ->  reason (LLM
-    answer, grounded only in the fused evidence)
+    type)  ->  fuse (normalize + provenance-link + rank + threshold)  ->
+    reason (LLM answer, grounded only in the fused evidence)
+
+Semantic importance is computed from a TRUE cosine similarity against the
+raw embedding vectors, not Couchbase's blended FTS relevance score --
+this keeps it comparable to other memory types' importance values instead
+of being structurally capped low by an unrelated scoring scale. Evidence
+below MIN_IMPORTANCE_THRESHOLD is dropped before Stage 5 ever sees it, so
+irrelevant retrieved evidence (e.g. a different customer's fact that
+still matched a vector search) can't reach the reasoning LLM regardless
+of how careful that LLM's own prompt discipline is.
 
 Every stage prints its output, so running this from the command line is a
 text-mode version of "watch the agent think" -- the same data a Memory
@@ -49,6 +58,27 @@ from couchbase.search import BooleanFieldQuery, MatchNoneQuery, SearchRequest
 from couchbase.vector_search import VectorQuery, VectorSearch
 
 MEMORY_TYPES = ["long_term", "episodic", "semantic", "procedural", "short_term"]
+
+# Below this, evidence is dropped before it ever reaches the reasoning LLM
+# (design spec Section 11 intends Context Fusion to hand the LLM curated
+# evidence, not everything retrieval happened to return). This is a second,
+# structural safeguard -- it does not rely on the reasoning LLM's own
+# judgment as the only thing keeping irrelevant evidence out of an answer.
+MIN_IMPORTANCE_THRESHOLD = 0.15
+
+
+def cosine_similarity(vec_a, vec_b):
+    """True cosine similarity computed directly from raw embedding vectors,
+    genuinely 0-1-ish for these models -- deliberately NOT the raw FTS
+    relevance score, which is a blended score that empirically tops out
+    around 0.3-0.4 even for a strong match and isn't comparable to the
+    fixed-constant importance values used by other memory types."""
+    dot = sum(a * b for a, b in zip(vec_a, vec_b))
+    norm_a = math.sqrt(sum(a * a for a in vec_a))
+    norm_b = math.sqrt(sum(b * b for b in vec_b))
+    if norm_a == 0 or norm_b == 0:
+        return 0.0
+    return dot / (norm_a * norm_b)
 
 
 # ===========================================================================
@@ -227,7 +257,13 @@ def retrieve_semantic(cluster, scope, bedrock_client, embed_model_id, bucket_nam
     for row in result.rows():
         try:
             doc = collection.get(row.id).content_as[dict]
-            hits.append({"similarity_score": row.score, **doc})
+            # Compute TRUE cosine similarity from the raw embedding vectors,
+            # rather than using row.score (Couchbase's blended FTS relevance
+            # score, which is not a clean 0-1 cosine similarity and isn't
+            # comparable to other memory types' fixed-constant importance
+            # values). See cosine_similarity() docstring for why this matters.
+            similarity = cosine_similarity(vector, doc["embedding"])
+            hits.append({"similarity_score": similarity, "fts_score": row.score, **doc})
         except DocumentNotFoundException:
             continue
     return hits
@@ -310,7 +346,11 @@ def normalize_evidence(memory_type, raw_results):
                 "memory_type": "semantic",
                 "content": fact.get("fact"),
                 "evidence_type": "extracted_knowledge",
-                "source_metadata": {"logical_id": fact.get("logical_id"), "similarity": round(similarity, 3)},
+                "source_metadata": {
+                    "logical_id": fact.get("logical_id"),
+                    "cosine_similarity": round(similarity, 3),
+                    "fts_score": round(fact.get("fts_score", 0.0), 3),
+                },
                 "importance": round(importance, 3),
                 "reason_selected": "Conceptual similarity match",
                 "source_event_id": fact.get("source_event_id"),
@@ -392,14 +432,21 @@ def link_provenance(evidence_list):
 
 
 def fuse_context(retrieval_results):
-    """retrieval_results: dict of memory_type -> raw retriever output."""
+    """retrieval_results: dict of memory_type -> raw retriever output.
+    Returns (kept_evidence, dropped_evidence) -- dropped items are anything
+    below MIN_IMPORTANCE_THRESHOLD, filtered out here so Stage 5 never sees
+    them, rather than relying on the reasoning LLM's own judgment as the
+    only thing keeping low-relevance evidence out of an answer."""
     all_evidence = []
     for memory_type, raw in retrieval_results.items():
         all_evidence.extend(normalize_evidence(memory_type, raw))
 
     all_evidence = link_provenance(all_evidence)
     all_evidence.sort(key=lambda e: e["importance"], reverse=True)
-    return all_evidence
+
+    kept = [e for e in all_evidence if e["importance"] >= MIN_IMPORTANCE_THRESHOLD]
+    dropped = [e for e in all_evidence if e["importance"] < MIN_IMPORTANCE_THRESHOLD]
+    return kept, dropped
 
 
 # ===========================================================================
@@ -512,9 +559,13 @@ def run(question, customer_id, session_id):
 
     # Stage 4: fuse
     print("\n--- Stage 4: Context Fusion ---")
-    evidence_list = fuse_context(retrieval_results)
+    evidence_list, dropped_evidence = fuse_context(retrieval_results)
     for e in evidence_list:
         print(f"  [{e['memory_type']:10s} importance={e['importance']:.3f}] {e['content']}")
+    if dropped_evidence:
+        print(f"\n  Dropped ({len(dropped_evidence)}, below importance {MIN_IMPORTANCE_THRESHOLD}):")
+        for e in dropped_evidence:
+            print(f"    [{e['memory_type']:10s} importance={e['importance']:.3f}] {e['content']}")
 
     # Persist routing trace
     trace_id = write_routing_trace(cluster, bucket_name, session_id, question, classifier_candidates, llm_decision)
@@ -529,6 +580,7 @@ def run(question, customer_id, session_id):
         "classifier_candidates": classifier_candidates,
         "llm_decision": llm_decision,
         "evidence": evidence_list,
+        "dropped_evidence": dropped_evidence,
         "answer": answer,
         "trace_id": trace_id,
     }

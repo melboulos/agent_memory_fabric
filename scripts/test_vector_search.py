@@ -20,6 +20,7 @@ Requires the same env vars as embed_seed_data.py:
 import json
 import os
 import sys
+import time
 from datetime import timedelta
 
 import boto3
@@ -46,8 +47,10 @@ def main():
     query_text = sys.argv[1] if len(sys.argv) > 1 else "why is a customer worried about database performance"
 
     print(f"Query: {query_text!r}")
+    t0 = time.perf_counter()
     vector = embed(query_text)
-    print(f"Embedded to {len(vector)} dims.\n")
+    embed_ms = round((time.perf_counter() - t0) * 1000)
+    print(f"Embedded to {len(vector)} dims. ({embed_ms}ms)\n")
 
     ca_bundle = os.environ.get("CB_CA_BUNDLE")
     if ca_bundle:
@@ -55,8 +58,11 @@ def main():
     else:
         auth = PasswordAuthenticator(os.environ["CB_USERNAME"], os.environ["CB_PASSWORD"])
 
+    t0 = time.perf_counter()
     cluster = Cluster(os.environ["CB_CONN_STR"], ClusterOptions(auth))
     cluster.wait_until_ready(timedelta(seconds=15))
+    connect_ms = round((time.perf_counter() - t0) * 1000)
+    print(f"Connected to cluster. ({connect_ms}ms)")
 
     bucket = cluster.bucket(os.environ.get("CB_BUCKET", "agent_memory"))
     scope = bucket.scope("knowledge")
@@ -68,14 +74,18 @@ def main():
     vector_query = VectorQuery("embedding", vector, num_candidates=5, prefilter=prefilter)
     vector_search = VectorSearch.from_vector_query(vector_query)
 
+    t0 = time.perf_counter()
     request = SearchRequest.create(MatchNoneQuery()).with_vector_search(vector_search)
     result = scope.search(
         "semantic_memory_vector_index",
         request,
         SearchOptions(fields=["fact", "content", "active", "logical_id"], limit=5),
     )
+    rows = list(result.rows())  # force evaluation -- the SDK streams lazily, so
+                                 # the search hasn't actually finished until this
+    search_ms = round((time.perf_counter() - t0) * 1000)
+    print(f"Search completed. ({search_ms}ms)\n")
 
-    rows = list(result.rows())
     if not rows:
         print("No results. Check that the index has finished building and the seed doc has a real embedding.")
         return
@@ -83,6 +93,8 @@ def main():
     for row in rows:
         print(f"score={row.score:.4f}  id={row.id}")
         print(f"  fields: {row.fields}\n")
+
+    print(f"--- Summary: embed={embed_ms}ms  connect={connect_ms}ms  search={search_ms}ms  total={embed_ms+connect_ms+search_ms}ms ---")
 
 
 if __name__ == "__main__":

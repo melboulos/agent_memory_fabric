@@ -64,20 +64,33 @@ Service REST API, not SQL++.
 ### 2. Generate real embeddings for the seed data
 
 The SQL script inserts two vector-backed seed documents with placeholder
-empty embeddings. Populate them with real vectors:
+empty embeddings. Populate them with real vectors using AWS Bedrock
+(Amazon Titan Text Embeddings G1 — fixed 1536-dim output, matches the
+vector index dimensions already configured):
 
 ```bash
 pip install -r requirements.txt
 
-export OPENAI_API_KEY=...
-export CB_CONN_STR="couchbases://<your-cluster>.cloud.couchbase.com"
+export CB_CONN_STR="couchbases://cb.<your-cluster>.cloud.couchbase.com"
 export CB_USERNAME=...
 export CB_PASSWORD=...
 export CB_BUCKET=agent_memory
+export BEDROCK_REGION=us-east-1
+export EMBED_MODEL_ID=amazon.titan-embed-text-v1
+export CB_CA_BUNDLE=/path/to/vectorcluster-root-certificate.txt   # optional —
+  # only needed for non-standard networking (VPC peering, private endpoints);
+  # the SDK bundles Capella's standard root cert by default
+
+# AWS credentials picked up automatically from your environment
+# (aws configure / AWS_ACCESS_KEY_ID + AWS_SECRET_ACCESS_KEY / assumed role)
 
 python scripts/embed_seed_data.py --dry-run   # sanity check, writes nothing
 python scripts/embed_seed_data.py             # writes real vectors
 ```
+
+If you'd rather correct the seed documents' `embedding_metadata.model`
+(currently a leftover placeholder value) independently of running the
+script, see `sql/fix_embedding_metadata.sql`.
 
 ### 3. Application layer (in progress)
 

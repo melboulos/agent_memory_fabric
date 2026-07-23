@@ -46,6 +46,7 @@ import json
 import math
 import os
 import sys
+import time
 import uuid
 from datetime import datetime, timedelta, timezone
 
@@ -162,13 +163,11 @@ def parse_json_from_llm(raw_text: str):
 # similarity scores per memory_type (max score per type, since a type may
 # have multiple labeled examples).
 # ===========================================================================
-def classify_intent(system_scope, bedrock_client, embed_model_id, question):
-    vector = embed_text(bedrock_client, embed_model_id, question)
-
+def classify_intent(system_scope, question_vector):
     prefilter = BooleanFieldQuery(True, field="active")
     # 30 covers headroom above the current 25 patterns (5 per memory type);
     # bump this if the pattern set grows further.
-    vector_query = VectorQuery("embedding", vector, num_candidates=30, prefilter=prefilter)
+    vector_query = VectorQuery("embedding", question_vector, num_candidates=30, prefilter=prefilter)
     vector_search = VectorSearch.from_vector_query(vector_query)
     request = SearchRequest.create(MatchNoneQuery()).with_vector_search(vector_search)
 
@@ -265,10 +264,9 @@ def retrieve_episodic(cluster, bucket_name, customer_id, limit=5):
     return list(result)
 
 
-def retrieve_semantic(cluster, scope, bedrock_client, embed_model_id, bucket_name, question, k=5):
-    vector = embed_text(bedrock_client, embed_model_id, question)
+def retrieve_semantic(cluster, scope, question_vector, bucket_name, k=5):
     prefilter = BooleanFieldQuery(True, field="active")
-    vector_query = VectorQuery("embedding", vector, num_candidates=k, prefilter=prefilter)
+    vector_query = VectorQuery("embedding", question_vector, num_candidates=k, prefilter=prefilter)
     vector_search = VectorSearch.from_vector_query(vector_query)
     request = SearchRequest.create(MatchNoneQuery()).with_vector_search(vector_search)
     result = scope.search(
@@ -289,7 +287,7 @@ def retrieve_semantic(cluster, scope, bedrock_client, embed_model_id, bucket_nam
             # score, which is not a clean 0-1 cosine similarity and isn't
             # comparable to other memory types' fixed-constant importance
             # values). See cosine_similarity() docstring for why this matters.
-            similarity = cosine_similarity(vector, doc["embedding"])
+            similarity = cosine_similarity(question_vector, doc["embedding"])
             hits.append({"similarity_score": similarity, "fts_score": row.score, **doc})
         except DocumentNotFoundException:
             continue
@@ -640,23 +638,39 @@ def run(question, customer_id, session_id, cluster=None, bedrock_client=None):
     knowledge_scope = cluster.bucket(bucket_name).scope("knowledge")
     system_scope = cluster.bucket(bucket_name).scope("system_intelligence")
 
+    timings = {}
+    t_total_start = time.perf_counter()
+
     print(f"\n{'='*70}\nQUESTION: {question}\n{'='*70}")
+
+    # Embed the question ONCE and reuse it for both the classifier (Stage 1)
+    # and semantic retrieval (Stage 3) -- these used to each call Bedrock
+    # separately for the identical text, which was a real, measurable waste
+    # (one full embedding round-trip, ~200-400ms, for nothing).
+    t0 = time.perf_counter()
+    question_vector = embed_text(bedrock_client, embed_model_id, question)
+    timings["embed_question_ms"] = round((time.perf_counter() - t0) * 1000)
 
     # Stage 1: classify (evidence, not decision)
     print("\n--- Stage 1: Memory Attention Layer (classifier evidence) ---")
-    classifier_candidates = classify_intent(system_scope, bedrock_client, embed_model_id, question)
+    t0 = time.perf_counter()
+    classifier_candidates = classify_intent(system_scope, question_vector)
+    timings["classify_ms"] = round((time.perf_counter() - t0) * 1000)
     for memory_type, score in classifier_candidates.items():
         print(f"  {memory_type:12s} {score:.3f}")
 
     # Stage 2: route (LLM decision)
     print("\n--- Stage 2: LLM Final Routing ---")
+    t0 = time.perf_counter()
     llm_decision = route_memories(bedrock_client, llm_model_id, question, classifier_candidates)
+    timings["route_ms"] = round((time.perf_counter() - t0) * 1000)
     for d in llm_decision:
         flag = "SELECTED" if d["selected"] else "skipped "
         print(f"  [{flag}] {d['memory']:12s} {d['reason']}")
 
     # Stage 3: retrieve only what was selected
     print("\n--- Stage 3: Retrieval ---")
+    t0 = time.perf_counter()
     retrieval_results = {}
     selected_types = {d["memory"] for d in llm_decision if d["selected"]}
 
@@ -667,9 +681,7 @@ def run(question, customer_id, session_id, cluster=None, bedrock_client=None):
         retrieval_results["episodic"] = retrieve_episodic(cluster, bucket_name, customer_id)
         print(f"  episodic:   {len(retrieval_results['episodic'])} event(s)")
     if "semantic" in selected_types:
-        retrieval_results["semantic"] = retrieve_semantic(
-            cluster, knowledge_scope, bedrock_client, embed_model_id, bucket_name, question
-        )
+        retrieval_results["semantic"] = retrieve_semantic(cluster, knowledge_scope, question_vector, bucket_name)
         print(f"  semantic:   {len(retrieval_results['semantic'])} fact(s)")
     if "procedural" in selected_types:
         retrieval_results["procedural"] = retrieve_procedural(cluster, bucket_name, question)
@@ -677,10 +689,13 @@ def run(question, customer_id, session_id, cluster=None, bedrock_client=None):
     if "short_term" in selected_types:
         retrieval_results["short_term"] = retrieve_short_term(cluster, bucket_name, session_id)
         print(f"  short_term: {'found' if retrieval_results['short_term'] else 'not found'}")
+    timings["retrieve_ms"] = round((time.perf_counter() - t0) * 1000)
 
     # Stage 4: fuse
     print("\n--- Stage 4: Context Fusion ---")
+    t0 = time.perf_counter()
     evidence_list, dropped_evidence = fuse_context(retrieval_results)
+    timings["fuse_ms"] = round((time.perf_counter() - t0) * 1000)
     for e in evidence_list:
         print(f"  [{e['memory_type']:10s} importance={e['importance']:.3f}] {e['content']}")
     if dropped_evidence:
@@ -689,12 +704,16 @@ def run(question, customer_id, session_id, cluster=None, bedrock_client=None):
             print(f"    [{e['memory_type']:10s} importance={e['importance']:.3f}] {e['content']}")
 
     # Persist routing trace
+    t0 = time.perf_counter()
     trace_id = write_routing_trace(cluster, bucket_name, session_id, question, classifier_candidates, llm_decision)
+    timings["save_trace_ms"] = round((time.perf_counter() - t0) * 1000)
     print(f"\n  (routing trace saved: {trace_id})")
 
     # Stage 5: reason
     print("\n--- Stage 5: Reasoning ---")
+    t0 = time.perf_counter()
     answer = generate_answer(bedrock_client, llm_model_id, question, evidence_list)
+    timings["reason_ms"] = round((time.perf_counter() - t0) * 1000)
     print(f"\n{answer}\n")
 
     coverage = score_answer_coverage(evidence_list, answer)
@@ -704,6 +723,9 @@ def run(question, customer_id, session_id, cluster=None, bedrock_client=None):
         flag = "used" if item["referenced"] else "IGNORED"
         print(f"    [{flag:7s} importance={item['importance']:.3f}] {item['evidence_id']}")
 
+    timings["total_ms"] = round((time.perf_counter() - t_total_start) * 1000)
+    print(f"\n  Timings (ms): " + ", ".join(f"{k}={v}" for k, v in timings.items()))
+
     return {
         "classifier_candidates": classifier_candidates,
         "llm_decision": llm_decision,
@@ -712,6 +734,7 @@ def run(question, customer_id, session_id, cluster=None, bedrock_client=None):
         "answer": answer,
         "coverage": coverage,
         "trace_id": trace_id,
+        "timings": timings,
     }
 
 

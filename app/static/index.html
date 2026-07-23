@@ -98,6 +98,14 @@
   .coverage-stat b { color: var(--ink); font-family: 'IBM Plex Mono', monospace; font-weight: 500; }
 
   .trace-id { font-family: 'IBM Plex Mono', monospace; font-size: 11px; color: var(--ink-faint); margin-top: 24px; }
+  .timing-row { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+  .timing-chip {
+    font-family: 'IBM Plex Mono', monospace; font-size: 11.5px; color: var(--ink-dim);
+    background: var(--dormant-fill); border-radius: 5px; padding: 4px 9px;
+  }
+  .timing-chip b { color: var(--ink); }
+  .timing-chip.slow { background: rgba(168,63,59,0.10); color: #7A2F2C; }
+  .timing-chip.slow b { color: #7A2F2C; }
   .empty-state { color: var(--ink-faint); font-size: 14px; padding: 24px 0; text-align: center; }
   .error-box { background: rgba(168,63,59,0.08); border: 1px solid var(--brick); color: #7A2F2C; border-radius: 8px; padding: 14px 18px; font-size: 14px; margin-bottom: 20px; }
 </style>
@@ -286,6 +294,23 @@ function renderResults(data) {
     <span class="coverage-stat">${i.evidence_id}: <b>${i.referenced ? 'used' : 'ignored'}</b></span>
   `).join(" &nbsp;&nbsp; ");
 
+  const t = data.timings || {};
+  const timingLabels = {
+    embed_question_ms: "embed question",
+    classify_ms: "classify",
+    route_ms: "route (LLM)",
+    retrieve_ms: "retrieve",
+    fuse_ms: "fuse",
+    save_trace_ms: "save trace",
+    reason_ms: "reason (LLM)",
+  };
+  const timingHtml = Object.entries(timingLabels).map(([key, label]) => {
+    const ms = t[key];
+    if (ms === undefined) return "";
+    const slow = ms > 800 ? "slow" : "";
+    return `<span class="timing-chip ${slow}">${label}: <b>${ms}ms</b></span>`;
+  }).join("");
+
   document.getElementById("results").innerHTML = `
     <div class="panel">
       <h2>Fused evidence</h2>
@@ -298,6 +323,10 @@ function renderResults(data) {
         <span class="coverage-stat">Coverage: <b>${Math.round(coverage.simple_coverage * 100)}%</b> of items, <b>${Math.round(coverage.importance_weighted_coverage * 100)}%</b> of importance</span>
       </div>
       <div style="margin-top:8px">${coverageItemsHtml}</div>
+    </div>
+    <div class="panel">
+      <h2>Timing (total: ${t.total_ms ?? '--'}ms)</h2>
+      <div class="timing-row">${timingHtml}</div>
     </div>
     <div class="trace-id">Routing trace: ${data.trace_id}</div>
   `;

@@ -122,11 +122,31 @@ Context Fusion) and the Memory Inspector / Agent Brain visualization UI.
 Tracked as the next milestones — see design spec Sections 9–11 for the
 locked architecture these will implement.
 
+### 3. Run the Memory Orchestrator
+
+`scripts/memory_orchestrator.py` implements the full pipeline from the
+design spec (Sections 9-11): classify (evidence) -> route (LLM decision)
+-> retrieve (per memory type) -> fuse (normalize + provenance-link + rank)
+-> reason (LLM answer, grounded only in the fused evidence). It prints
+every stage, so running it is a text-mode version of "watch the agent
+think":
+
+```bash
+export LLM_MODEL_ID=meta.llama3-70b-instruct-v1:0   # in addition to the env
+                                                     # vars from step 2
+
+python scripts/memory_orchestrator.py \
+  --question "Why are they considering migration?" \
+  --customer-id acme_001 \
+  --session-id session_123
+```
+
 ## Status
 
 - [x] Design spec (v2, locked)
 - [x] Capella data model (scopes, collections, GSIs, seed data)
 - [x] Vector search indexes (validated against a live cluster)
-- [x] Seed embedding generation script
-- [ ] Memory Orchestrator (classifier, routing, fusion)
+- [x] Seed embedding generation script (auto-discovers docs needing embeddings)
+- [x] Richer seed dataset (decoy customer, event timeline, matched playbook, full classifier pattern coverage)
+- [x] Memory Orchestrator (classifier, routing, retrieval, fusion, reasoning)
 - [ ] Memory Inspector / Agent Brain visualization UI
